@@ -16,7 +16,34 @@ All responses are JSON (`application/json; charset=utf-8`), except the transfer 
 | `GET` | `/health` | Check that the service is running |
 | `GET` | `/ibans/:iban` | Validate and format one IBAN |
 | `POST` | `/transfers` | Create a transfer |
+| `GET` | `/confluence/status` | Check the protected Confluence connection |
+| `GET` | `/confluence/search?query=...` | Search Confluence pages |
+| `GET` | `/confluence/pages/:id` | Read a Confluence page |
 | `GET` | `/` | The transfer console (HTML) |
+
+### Confluence Cloud read-only endpoints
+
+Set `CONFLUENCE_BASE_URL` to your Atlassian site URL including `/wiki`, and configure `CONFLUENCE_EMAIL`, `CONFLUENCE_API_TOKEN`, and `CONFLUENCE_PROXY_API_KEY` in the server environment. Use a Confluence API token with read-only access. The proxy key is separate from the Atlassian token and is required on every `/confluence/` request:
+
+```bash
+curl -H "Authorization: Bearer $CONFLUENCE_PROXY_API_KEY" \
+  http://localhost:3000/confluence/status
+curl -G -H "Authorization: Bearer $CONFLUENCE_PROXY_API_KEY" \
+  --data-urlencode "query=transfer guide" \
+  http://localhost:3000/confluence/search
+curl -H "Authorization: Bearer $CONFLUENCE_PROXY_API_KEY" \
+  http://localhost:3000/confluence/pages/123456
+```
+
+The status response only reports whether the connection is configured and authenticated; it does not return the Atlassian account profile. Search results contain page IDs, titles, types, and space keys. Page reads return the page title, type, space key, and Confluence storage-format content.
+
+| Route | Success response |
+|---|---|
+| `GET /confluence/status` | `{ "configured": true, "connected": true }` |
+| `GET /confluence/search?query=transfer` | `{ "results": [{ "id": "123456", "title": "Transfer guide", "type": "page", "spaceKey": "OPS" }] }` |
+| `GET /confluence/pages/123456` | `{ "id": "123456", "title": "Transfer guide", "type": "page", "spaceKey": "OPS", "content": "<p>...</p>" }` |
+
+The search query must be 1–200 characters. Page IDs must contain only digits. Requests time out after 8 seconds. These routes return generic `502` errors when Confluence rejects credentials or is unavailable; upstream response details and credentials are not returned.
 
 ### GET /health
 
@@ -138,9 +165,14 @@ HTTP errors have this shape:
 | `DESCRIPTION_TOO_LONG` | transfer `errors` | 422 | `description` is longer than 140 characters |
 | `INVALID_JSON` | `error` | 400 | The body of `POST /transfers` is not valid JSON |
 | `INVALID_REQUEST` | `error` | 400 | The IBAN in `GET /ibans/:iban` is not URL-encoded correctly |
+| `UNAUTHORIZED` | `error` | 401 | A valid `CONFLUENCE_PROXY_API_KEY` bearer token is required |
 | `NOT_FOUND` | `error` | 404 | No such route or file |
 | `METHOD_NOT_ALLOWED` | `error` | 405 | `/transfers` only accepts `POST` |
 | `PAYLOAD_TOO_LARGE` | `error` | 413 | The request body is larger than 100 KB |
+| `CONFLUENCE_NOT_CONFIGURED` | `error` | 503 | Confluence credentials are not configured |
+| `CONFLUENCE_PROXY_NOT_CONFIGURED` | `error` | 503 | The proxy key is not configured |
+| `CONFLUENCE_AUTH_FAILED` | `error` | 502 | Confluence rejected the configured credentials |
+| `CONFLUENCE_UNAVAILABLE` | `error` | 502 | Confluence could not be reached |
 | `INTERNAL_ERROR` | `error` | 500 | Unexpected error; details are logged on the server only |
 
 ## POST /transfers step by step

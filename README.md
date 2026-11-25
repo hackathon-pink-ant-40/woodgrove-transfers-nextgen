@@ -52,6 +52,20 @@ curl http://localhost:3000/ibans/NL91ABNA0417164300
 
 Set `PORT` to use another port.
 
+### Connect read-only Confluence Cloud
+
+The server can proxy page searches and page reads to Confluence Cloud. Configure the site URL (including `/wiki`), the Atlassian account email, and an API token in the server environment. A separate proxy key is required to protect the app's Confluence routes:
+
+```bash
+export CONFLUENCE_BASE_URL="https://dhanunjayarao8899.atlassian.net/wiki"
+export CONFLUENCE_EMAIL="dhanunjayarao.8899@gmail.com"
+export CONFLUENCE_API_TOKEN="ATATT3xFfGF0Bjigo4V1rwkybdRuSXIpRzbOQLcjd_dxpSJKP7KXa946d8bYICMR_8L41HkqbyXE68HJI4TJ49fx-IahuI-eahHH8jYasSlHGxIIK58l7j7KmnBjH-CouNwcELLCO1M3Bk5YQPzlM_GZzmMW0WK3MqNquy3p1AXrmi3wLcD-e1U=C362859E"
+export CONFLUENCE_PROXY_API_KEY="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))")"
+node server.js
+```
+
+Keep both tokens private and out of source control. The Confluence API token is only used by the server; clients must send `Authorization: Bearer $CONFLUENCE_PROXY_API_KEY` to the `/confluence/` endpoints. See [docs/api.md](docs/api.md#confluence-cloud-read-only-endpoints) for endpoint examples.
+
 ## Project map
 
 ```text
@@ -63,7 +77,8 @@ src/
 data/
   accounts.js      Woodgrove's own accounts: IBAN → account holder
 console/           the transfer console (index.html, console.js, console.css)
-server.js          optional HTTP API: GET /health, GET /ibans/:iban, POST /transfers
+server.js          optional HTTP API, including protected read-only Confluence routes
+src/confluence.js  server-side read-only Confluence Cloud API client
 tests/
   *.test.js        the tests
   harness.js       a tiny test framework (describe, test, expect)

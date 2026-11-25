@@ -11,13 +11,21 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 
 const iban = require('./src/iban');
 const transfers = require('./src/transfer');
+const confluenceModule = require('./src/confluence');
 
 const PORT = Number(process.env.PORT) || 3000;
 const ROOT = __dirname;
 const MAX_BODY_BYTES = 100 * 1024;
+const CONFLUENCE_PROXY_API_KEY = process.env.CONFLUENCE_PROXY_API_KEY || '';
+const confluence = confluenceModule.createClient({
+  baseUrl: process.env.CONFLUENCE_BASE_URL,
+  email: process.env.CONFLUENCE_EMAIL,
+  apiToken: process.env.CONFLUENCE_API_TOKEN,
+});
 
 // Static files: the console, plus the data/ and src/ files it loads with <script> tags.
 const STATIC_DIRS = { '/': 'console', '/data/': 'data', '/src/': 'src' };
@@ -80,7 +88,8 @@ function serveStatic(req, res, pathname) {
 }
 
 async function handle(req, res) {
-  const { pathname } = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  const { pathname } = url;
 
   if (req.method === 'GET' && pathname === '/health') {
     return sendJson(res, 200, { status: 'ok', service: 'woodgrove-transfers', time: new Date().toISOString() });
@@ -101,6 +110,68 @@ async function handle(req, res) {
       country,
       sepa: iban.isSepaCountry(country),
     });
+  }
+
+  if (pathname.startsWith('/confluence/')) {
+    if (req.method !== 'GET') return sendError(res, 405, 'METHOD_NOT_ALLOWED', 'Use GET to read Confluence data.');
+    if (!CONFLUENCE_PROXY_API_KEY) {
+      return sendError(res, 503, 'CONFLUENCE_PROXY_NOT_CONFIGURED', 'Set CONFLUENCE_PROXY_API_KEY to enable Confluence routes.');
+    }
+    const suppliedKey = req.headers.authorization?.startsWith('Bearer ')
+      ? req.headers.authorization.slice('Bearer '.length)
+      : '';
+    const expected = Buffer.from(CONFLUENCE_PROXY_API_KEY);
+    const supplied = Buffer.from(suppliedKey);
+    if (expected.length !== supplied.length || !crypto.timingSafeEqual(expected, supplied)) {
+      return sendError(res, 401, 'UNAUTHORIZED', 'A valid bearer token is required.');
+    }
+
+    try {
+      if (pathname === '/confluence/status') {
+        if (confluence.configurationState() === 'unconfigured') {
+          return sendJson(res, 200, { configured: false, connected: false });
+        }
+        await confluence.getCurrentUser();
+        return sendJson(res, 200, { configured: true, connected: true });
+      }
+
+      if (pathname === '/confluence/search') {
+        const query = (url.searchParams.get('query') || '').trim();
+        if (!query || query.length > 200) {
+          return sendError(res, 400, 'INVALID_REQUEST', 'Provide a search query of 1 to 200 characters.');
+        }
+
+        const type = url.searchParams.get('type') || 'page';
+        if (!['page', 'blogpost', 'any'].includes(type)) {
+          return sendError(res, 400, 'INVALID_REQUEST', 'type must be page, blogpost, or any.');
+        }
+
+        let limit = 25;
+        const rawLimit = url.searchParams.get('limit');
+        if (rawLimit !== null) {
+          limit = Number(rawLimit);
+          if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+            return sendError(res, 400, 'INVALID_REQUEST', 'limit must be an integer between 1 and 50.');
+          }
+        }
+
+        return sendJson(res, 200, { results: await confluence.searchPages(query, { type, limit }) });
+      }
+
+      const pageMatch = pathname.match(/^\/confluence\/pages\/([^/]+)$/);
+      if (pageMatch) {
+        if (!/^\d+$/.test(pageMatch[1])) {
+          return sendError(res, 400, 'INVALID_REQUEST', 'The Confluence page ID must contain only digits.');
+        }
+        return sendJson(res, 200, await confluence.getPage(pageMatch[1]));
+      }
+    } catch (error) {
+      if (error instanceof confluenceModule.ConfluenceError) {
+        return sendError(res, error.status, error.code, error.message);
+      }
+      throw error;
+    }
+    return sendError(res, 404, 'NOT_FOUND', `No route for ${req.method} ${pathname}`);
   }
 
   if (pathname === '/transfers') {
